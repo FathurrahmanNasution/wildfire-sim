@@ -1,25 +1,36 @@
 # config.py
 SCREEN_W = 1200
 SCREEN_H = 800
-BACKGROUND_SKY = (135, 206, 235)
-FPS = 30
+FPS = 60
 
-GRID_SIZE = 20           # NxN world grid
-TILE_WORLD_SIZE = 5.0    # spacing between trees (world units)
-TREE_DENSITY = 0.75      # chance to place tree at a grid cell
+# World / grid
+GRID_SIZE = 20
+TILE_WORLD_SIZE = 5.0
 
-# fire params (you said will tune later)
-BURNING_DURATION = 15     # frames until tree becomes burnt
-FIRE_SPREAD_BASE = 0.07   # base spread chance per neighbor per spread call
+# Fire
+BURNING_DURATION = 60        # base frames for burning (will be adjusted by resistance)
+FIRE_SPREAD_BASE = 0.20
+WIND_DIR = (1.0, 0.0)
+WIND_STRENGTH = 0.35
 
-# Particle params
+# Particles
 MAX_PARTICLES = 800
 
-# Colors
-COLOR_TRUNK = (101, 67, 33)
-COLOR_ASH = (64, 64, 64)
+# Colors (normalized floats 0..1) for terrain types (distinct)
+TYPE_COLOR = {
+    "grass":      (0.30, 0.90, 0.30),
+    "dry_grass":  (0.90, 0.90, 0.30),
+    "brush":      (0.10, 0.50, 0.10),
+    "dry_brush":  (0.60, 0.30, 0.10),
+    "forest":     (0.00, 0.40, 0.00),
+    "dry_forest": (0.82, 0.41, 0.12),  # chocolate-like
+    "city":       (0.50, 0.50, 0.50),
+    "river":      (0.10, 0.30, 0.90),
+    "stone":      (0.60, 0.60, 0.60),
+    "swamp":      (0.00, 0.30, 0.20)
+}
 
-# config.py
+# Resistance (0..100). 100 = non-flammable
 TYPE_RESISTANCE = {
     'city': 35,
     'river': 100,
@@ -31,4 +42,18 @@ TYPE_RESISTANCE = {
     'dry_grass': 0,
     'stone': 100,
     'swamp': 60
+}
+
+# Height ranges
+HEIGHT_RANGES = {
+    'city': (6.0, 20.0),
+    'river': (0.1, 0.3),
+    'forest': (8.0, 14.0),
+    'dry_forest': (6.0, 12.0),
+    'brush': (2.0, 4.0),
+    'dry_brush': (1.5, 3.5),
+    'grass': (0.5, 1.5),
+    'dry_grass': (0.3, 1.0),
+    'stone': (3.0, 8.0),
+    'swamp': (1.0, 3.0)
 }

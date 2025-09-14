@@ -1,260 +1,202 @@
 # main.py
-import pygame
-import numpy as np
-import math
-from config import SCREEN_W, SCREEN_H, FPS
+import sys, math, pygame
+from pygame.locals import *
+from OpenGL.GL import *
+from OpenGL.GLU import *
+
+from config import SCREEN_W, SCREEN_H, FPS, TILE_WORLD_SIZE, GRID_SIZE
 from world import WildfireWorld
 from particles import ParticleSystem
-from renderer import Renderer
+from renderer_opengl import GLRenderer
 from states import TreeState
 
-def find_clicked_tree(renderer, world, mx, my, click_radius=30):
-    best = None
-    best_dist2 = float('inf')
-    for pos, cell in world.cells.items():
-        world_pos = cell['position'].copy()
-        world_pos[1] = cell['height'] * 0.6
-        sp = renderer.world_to_screen(world_pos)
-        if sp is None:
-            continue
-        sx, sy, depth = sp
-        dx = sx - mx
-        dy = sy - my
-        d2 = dx*dx + dy*dy
-        if d2 < best_dist2:
-            best_dist2 = d2
-            best = pos
-    if best is not None and best_dist2 <= click_radius * click_radius:
-        return best
-    return None
+TERRAIN_TYPES = [
+    "forest", "dry_forest",
+    "grass", "dry_grass",
+    "brush", "dry_brush",
+    "city", "river", "stone", "swamp"
+]
 
-def draw_instructions(screen):
-    """Draw instruction panel on the screen"""
-    font = pygame.font.Font(None, 20)
-    instructions = [
+def init_pygame():
+    pygame.init()
+    pygame.display.set_mode((SCREEN_W, SCREEN_H), DOUBLEBUF | OPENGL)
+    pygame.display.set_caption("Wildfire Forest Simulator (OpenGL)")
+
+def draw_ui_opengl(font, paused, current_terrain, stats):
+    """Render a small UI panel using pygame font to an OpenGL raster."""
+    lines = [
         "CONTROLS:",
         "WASD: Move camera",
-        "QE: Move up/down", 
-        "Arrows: Rotate camera",
-        "Shift: Fast movement",
-        "Ctrl: Slow movement",
-        "+/-: Zoom in/out",
-        "Left click: Ignite fire",
-        "Right click: Cycle terrain",
-        "F: Random fire",
-        "R: Reset world",
-        "SPACE: Pause/unpause",
-        "C: Recenter camera",
-        "K: Save map",
-        "L: Load map",
-        "H: Toggle help"
+        "Arrow keys: Rotate camera",
+        "Q/E: Move up/down",
+        "F: Random Fire",
+        "Left click: Ignite + Highlight",
+        "Right click: Cycle terrain (morph)",
+        f"Place type: {current_terrain}",
+        f"Status: {'PAUSED' if paused else 'RUNNING'}",
+        f"Healthy:{stats[0]} Burning:{stats[1]} Burnt:{stats[2]}"
     ]
-    
-    # Create semi-transparent background
-    panel_width = 220
-    panel_height = len(instructions) * 22 + 10
-    panel_surf = pygame.Surface((panel_width, panel_height), flags=pygame.SRCALPHA)
-    panel_surf.fill((0, 0, 0, 180))
-    
-    # Draw instructions
-    for i, line in enumerate(instructions):
-        color = (255, 255, 0) if line == "CONTROLS:" else (255, 255, 255)
-        text_surf = font.render(line, True, color)
-        panel_surf.blit(text_surf, (5, 5 + i * 22))
-    
-    screen.blit(panel_surf, (10, 10))
+    surf_w = 320
+    surf_h = 20 * len(lines) + 10
+    surf = pygame.Surface((surf_w, surf_h), flags=SRCALPHA)
+    surf.fill((0, 0, 0, 150))
+    for i, line in enumerate(lines):
+        col = (255, 255, 0) if i == 0 else (255, 255, 255)
+        txt = font.render(line, True, col)
+        surf.blit(txt, (6, 6 + i * 20))
+    data = pygame.image.tostring(surf, "RGBA", True)
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix(); glLoadIdentity()
+    glOrtho(0, SCREEN_W, 0, SCREEN_H, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix(); glLoadIdentity()
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+    glRasterPos2i(10, SCREEN_H - surf_h - 10)
+    glDrawPixels(surf_w, surf_h, GL_RGBA, GL_UNSIGNED_BYTE, data)
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
 
 def main():
-    pygame.init()
-    screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-    pygame.display.set_caption("3D Wildfire Simulator (Enhanced)")
-
-    world = WildfireWorld(grid_size=20)
+    init_pygame()
+    world = WildfireWorld(grid_size=GRID_SIZE)
     particles = ParticleSystem()
-    renderer = Renderer(screen, world)
+    renderer = GLRenderer(SCREEN_W, SCREEN_H)
+
+    cam_pos = [0.0, 28.0, 80.0]
+    cam_yaw = 0.0
+    cam_pitch = -20.0
+    move_speed = 3.0
+    rot_speed = 2.0
+
+    font = pygame.font.Font(None, 20)
+    current_terrain_index = 0
 
     clock = pygame.time.Clock()
     running = True
     paused = False
-    show_help = True
-    time_step = 0
-
-    # Terrain types for cycling
-    terrain_types = ['forest', 'dry_forest', 'grass', 'dry_grass', 'brush', 'dry_brush', 
-                     'city', 'river', 'stone', 'swamp']
-    current_terrain_index = 0
+    
+    # barrier box = world boundary (in grid coordinates)
+    half = GRID_SIZE // 2
+    barriers = [
+        ((-half, -half), (half, -half)),
+        ((half, -half), (half, half)),
+        ((half, half), (-half, half)),
+        ((-half, half), (-half, -half))
+    ]
 
     while running:
-        # Input handling
-        keys = pygame.key.get_pressed()
-        move_speed = 3.0
-        rot_speed = 0.025
-        
-        # Camera movement
-        if keys[pygame.K_w]:
-            dx = math.sin(renderer.camera_angle_y) * move_speed
-            dz = math.cos(renderer.camera_angle_y) * move_speed
-            renderer.camera_pos[0] += dx
-            renderer.camera_pos[2] += dz
-        if keys[pygame.K_s]:
-            dx = math.sin(renderer.camera_angle_y) * move_speed
-            dz = math.cos(renderer.camera_angle_y) * move_speed
-            renderer.camera_pos[0] -= dx
-            renderer.camera_pos[2] -= dz
-        if keys[pygame.K_a]:
-            dx = math.sin(renderer.camera_angle_y - math.pi/2) * move_speed
-            dz = math.cos(renderer.camera_angle_y - math.pi/2) * move_speed
-            renderer.camera_pos[0] += dx
-            renderer.camera_pos[2] += dz
-        if keys[pygame.K_d]:
-            dx = math.sin(renderer.camera_angle_y + math.pi/2) * move_speed
-            dz = math.cos(renderer.camera_angle_y + math.pi/2) * move_speed
-            renderer.camera_pos[0] += dx
-            renderer.camera_pos[2] += dz
-        if keys[pygame.K_q]:
-            renderer.camera_pos[1] += move_speed
-        if keys[pygame.K_e]:
-            renderer.camera_pos[1] -= move_speed
+        dt = clock.tick(FPS) / 1000.0
 
-        # Camera rotation
-        if keys[pygame.K_LEFT]:
-            renderer.camera_angle_y -= rot_speed
-        if keys[pygame.K_RIGHT]:
-            renderer.camera_angle_y += rot_speed
-        if keys[pygame.K_UP]:
-            renderer.camera_angle_x = max(-math.pi/3, renderer.camera_angle_x - rot_speed)
-        if keys[pygame.K_DOWN]:
-            renderer.camera_angle_x = min(math.pi/3, renderer.camera_angle_x + rot_speed)
-
-        # Zoom
-        if keys[pygame.K_PLUS] or keys[pygame.K_EQUALS]:
-            renderer.zoom = min(3.0, renderer.zoom * 1.01)
-        if keys[pygame.K_MINUS]:
-            renderer.zoom = max(0.35, renderer.zoom * 0.99)
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
+        for ev in pygame.event.get():
+            if ev.type == QUIT:
                 running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
+            elif ev.type == KEYDOWN:
+                if ev.key == K_ESCAPE:
+                    running = False
+                elif ev.key == K_SPACE:
                     paused = not paused
-                elif event.key == pygame.K_r:
+                elif ev.key == K_r:
                     world.reset()
                     particles.particles.clear()
-                    time_step = 0
-                elif event.key == pygame.K_f:
-                    world.random_ignite(1)
-                elif event.key == pygame.K_c:
-                    renderer.camera_pos = np.array([0.0, 18.0, -80.0], dtype=np.float32)
-                    renderer.camera_angle_x = 0.0
-                    renderer.camera_angle_y = 0.0
-                    renderer.zoom = 1.0
-                elif event.key == pygame.K_h:
-                    show_help = not show_help
-                elif event.key == pygame.K_k:
-                    world.save_map("maps/user_custom.txt")
-                elif event.key == pygame.K_l:
-                    world.load_map("maps/user_custom.txt")
-                    particles.particles.clear()
-                    time_step = 0
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click - ignite fire
-                    mx, my = event.pos
-                    sel = find_clicked_tree(renderer, world, mx, my)
-                    if sel is not None:
-                        cell = world.cells[sel]
+                elif ev.key == K_f:
+                    world.random_ignite(3)
+            elif ev.type == MOUSEBUTTONDOWN:
+                # ensure camera matrix loaded for accurate picking
+                tx = cam_pos[0] + math.sin(math.radians(cam_yaw))
+                ty = cam_pos[1] + math.tan(math.radians(cam_pitch))
+                tz = cam_pos[2] - math.cos(math.radians(cam_yaw))
+                renderer.set_camera(cam_pos, (tx, ty, tz))
+                sel = renderer.pick_cell(ev.pos[0], ev.pos[1], world)
+                if sel and sel in world.cells:
+                    cell = world.cells[sel]
+                    if ev.button == 1:  # left click = ignite + highlight
                         if cell['state'] == TreeState.HEALTHY:
                             cell['state'] = TreeState.BURNING
                             cell['burning_time'] = 0
-                elif event.button == 3:  # Right click - cycle terrain type
-                    mx, my = event.pos
-                    sel = find_clicked_tree(renderer, world, mx, my)
-                    if sel is not None:
-                        current_terrain_index = (current_terrain_index + 1) % len(terrain_types)
-                        new_terrain = terrain_types[current_terrain_index]
-                        cell = world.cells[sel]
-                        cell['type'] = new_terrain
-                        cell['state'] = TreeState.HEALTHY
-                        cell['burning_time'] = 0
-                        # Adjust height based on terrain type
-                        if new_terrain in ['forest', 'dry_forest']:
-                            cell['height'] = np.random.uniform(8.0, 14.0)
-                        elif new_terrain == 'city':
-                            cell['height'] = np.random.uniform(6.0, 20.0)
-                        elif new_terrain in ['brush', 'dry_brush']:
-                            cell['height'] = np.random.uniform(2.0, 4.0)
-                        elif new_terrain in ['grass', 'dry_grass']:
-                            cell['height'] = np.random.uniform(0.5, 1.5)
-                        elif new_terrain == 'stone':
-                            cell['height'] = np.random.uniform(3.0, 8.0)
-                        elif new_terrain == 'swamp':
-                            cell['height'] = np.random.uniform(1.0, 3.0)
-                        else:  # river
-                            cell['height'] = 0.2
+                    elif ev.button == 3:  # right click = morph
+                        current_terrain_index = (current_terrain_index + 1) % len(TERRAIN_TYPES)
+                        new_type = TERRAIN_TYPES[current_terrain_index]
+                        world.start_morph(sel, new_type)
 
-        # Update simulation
+        # movement input
+        keys = pygame.key.get_pressed()
+        forward = [math.sin(math.radians(cam_yaw)), 0, -math.cos(math.radians(cam_yaw))]
+        right = [math.cos(math.radians(cam_yaw)), 0, math.sin(math.radians(cam_yaw))]
+
+        if keys[K_w]:
+            cam_pos[0] += forward[0] * move_speed * dt * 30.0
+            cam_pos[2] += forward[2] * move_speed * dt * 30.0
+        if keys[K_s]:
+            cam_pos[0] -= forward[0] * move_speed * dt * 30.0
+            cam_pos[2] -= forward[2] * move_speed * dt * 30.0
+        if keys[K_a]:
+            cam_pos[0] -= right[0] * move_speed * dt * 30.0
+            cam_pos[2] -= right[2] * move_speed * dt * 30.0
+        if keys[K_d]:
+            cam_pos[0] += right[0] * move_speed * dt * 30.0
+            cam_pos[2] += right[2] * move_speed * dt * 30.0
+        if keys[K_q]:
+            cam_pos[1] += move_speed * dt * 30.0
+        if keys[K_e]:
+            cam_pos[1] -= move_speed * dt * 30.0
+
+        if keys[K_LEFT]:
+            cam_yaw -= rot_speed
+        if keys[K_RIGHT]:
+            cam_yaw += rot_speed
+        if keys[K_UP]:
+            cam_pitch = min(80.0, cam_pitch + rot_speed)
+        if keys[K_DOWN]:
+            cam_pitch = max(-80.0, cam_pitch - rot_speed)
+
+        # clamp camera to barrier box
+        max_bound = half * TILE_WORLD_SIZE
+        cam_pos[0] = max(-max_bound, min(max_bound, cam_pos[0]))
+        cam_pos[2] = max(-max_bound, min(max_bound, cam_pos[2]))
+
+        # simulation update
         if not paused:
-            world.spread_fire()
-            particles.update()
-            time_step += 1
+            world.update(dt)
+            for c in world.cells.values():
+                if c['state'] == TreeState.BURNING:
+                    particles.spawn_tree_particles(c['position'], c['height'], count=1)
+            particles.update(dt)
 
-        # Render everything
+        # camera target and render
+        tx = cam_pos[0] + math.sin(math.radians(cam_yaw))
+        ty = cam_pos[1] + math.tan(math.radians(cam_pitch))
+        tz = cam_pos[2] - math.cos(math.radians(cam_yaw))
+        target = (tx, ty, tz)
+
         renderer.clear()
-        renderer.draw_ground_tiles()
+        renderer.set_camera(cam_pos, target)
 
-        # Sort objects by depth for proper rendering
-        visible = []
+        renderer.draw_ground(world.grid_size, TILE_WORLD_SIZE)
+
+        # draw barrier
+        for (x0, z0), (x1, z1) in barriers:
+            renderer.draw_barrier(x0, z0, x1, z1)
+
+        # draw world objects
         for pos, cell in world.cells.items():
-            proj = renderer.world_to_screen(cell['position'] + np.array([0.0, cell['height']*0.5, 0.0]))
-            if proj:
-                visible.append((proj[2], pos, cell))
-        visible.sort(reverse=True, key=lambda x: x[0])
+            renderer.draw_object(cell['position'], cell['height'], TILE_WORLD_SIZE,
+                                 state=cell['state'], cell_type=cell['type'],
+                                 particles=particles, morph_info=cell.get('morph', None))
 
-        # Draw all 3D objects
-        for depth, pos, cell in visible:
-            renderer.draw_3d_object(cell['position'], cell['height'], cell['state'], cell['type'], particle_system=particles)
+        particles.render_gl()
 
-        # Draw particles
-        surf = pygame.Surface((SCREEN_W, SCREEN_H), flags=pygame.SRCALPHA)
-        for p in particles.particles:
-            proj = renderer.world_to_screen(p['pos'])
-            if not proj:
-                continue
-            x, y = proj[0], proj[1]
-            if p['type'] == 'ember':
-                life_factor = max(0.0, p['life'] / 90.0)
-                col = (255, int(160 * life_factor), int(40 * life_factor), int(200 * life_factor))
-                radius = max(1, int(p['size'] * (0.8 + 0.6 * life_factor)))
-                pygame.draw.circle(surf, col, (x, y), radius)
-            else:
-                life_factor = max(0.0, p['life'] / 90.0)
-                col = (80, 80, 80, int(160 * life_factor))
-                radius = max(1, int(p['size'] * (1.2 + 1.4 * (1-life_factor))))
-                pygame.draw.circle(surf, col, (x, y), radius)
-        screen.blit(surf, (0, 0))
-
-        # Draw UI
-        font = pygame.font.Font(None, 22)
-        healthy = sum(1 for t in world.cells.values() if t['state'] == TreeState.HEALTHY)
-        burning = sum(1 for t in world.cells.values() if t['state'] == TreeState.BURNING)
-        burnt = sum(1 for t in world.cells.values() if t['state'] == TreeState.BURNT)
-        stats = f"Time:{time_step}  Healthy:{healthy}  Burning:{burning}  Burnt:{burnt}  {'PAUSED' if paused else 'RUN'}"
-        surf_stats = font.render(stats, True, (255, 255, 0))
-        screen.blit(surf_stats, (8, SCREEN_H - 28))
-
-        # Show current terrain type being placed
-        terrain_info = f"Current terrain: {terrain_types[current_terrain_index]} (Right-click to change)"
-        surf_terrain = font.render(terrain_info, True, (200, 200, 255))
-        screen.blit(surf_terrain, (8, SCREEN_H - 50))
-
-        # Draw instructions if enabled
-        if show_help:
-            draw_instructions(screen)
+        # UI overlay
+        healthy = sum(1 for c in world.cells.values() if c['state'] == TreeState.HEALTHY)
+        burning = sum(1 for c in world.cells.values() if c['state'] == TreeState.BURNING)
+        burnt = sum(1 for c in world.cells.values() if c['state'] == TreeState.BURNT)
+        draw_ui_opengl(font, paused, TERRAIN_TYPES[current_terrain_index], (healthy, burning, burnt))
 
         pygame.display.flip()
-        clock.tick(FPS)
 
     pygame.quit()
+    sys.exit()
 
 if __name__ == "__main__":
     main()
