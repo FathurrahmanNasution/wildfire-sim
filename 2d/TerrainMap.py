@@ -4,7 +4,8 @@ import os
 from TerrainTile import TerrainTile
 
 class TerrainMap:
-    MAP_PATH = os.path.join(os.getcwd(), 'maps') + os.sep
+    # Point to the parent directory's maps folder
+    MAP_PATH = os.path.join(os.path.dirname(os.getcwd()), 'maps')
 
     def __init__(self, mapfile=None, size=0):
         """

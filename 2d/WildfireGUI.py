@@ -21,8 +21,8 @@ PANEL_YPOS = 100
 MIN_GRID = 10
 MAX_GRID = 20
 SIM_SPEED = 160
-DEFAULT_MAP = 'test_map.txt'
-USER_FILE = 'user_custom.txt'
+DEFAULT_MAP = 'test_map2d.txt'
+USER_FILE = 'maps/user_custom2d.txt'
 WINDOW_TITLE = 'Wildfire Simulator'
 
 # ----------------- Basic Algorithms -----------------

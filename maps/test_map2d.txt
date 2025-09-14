@@ -1,0 +1,10 @@
+grass grass grass grass grass grass grass grass grass grass
+grass forest forest forest grass grass brush brush brush grass
+grass forest swamp forest grass grass brush swamp brush grass
+grass forest forest forest grass grass brush brush brush grass
+grass grass grass grass grass grass grass grass grass grass
+grass stone stone grass grass grass grass grass river river
+grass stone stone grass grass dry_brush dry_brush grass river river
+grass grass grass grass dry_forest dry_forest grass grass grass grass
+grass grass grass grass dry_forest dry_forest grass grass grass grass
+grass grass grass grass grass grass grass grass grass grass
